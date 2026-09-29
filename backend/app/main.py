@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import JSONResponse
 
 from app.core.config import settings
@@ -47,7 +48,7 @@ app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     description="AI-powered restaurant customer support and operations agent",
-    docs_url="/api/docs",
+    docs_url="/docs",
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
     lifespan=lifespan,
@@ -66,7 +67,7 @@ app.add_middleware(
 # Centralized exception handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Unhandled exception on {request.url}: {type(exc).__name__}: {exc}")
+    logger.error("Unhandled server exception (%s)", type(exc).__name__)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "An internal server error occurred. Please try again later."},
@@ -86,11 +87,19 @@ app.include_router(dashboard.router)
 app.include_router(health.router)
 
 
+@app.get("/api/docs", include_in_schema=False)
+def api_docs_compatibility():
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url,
+        title=f"{app.title} - Swagger UI",
+    )
+
+
 @app.get("/")
 def root():
     return {
         "name": settings.APP_NAME,
         "version": settings.APP_VERSION,
-        "docs": "/api/docs",
+        "docs": "/docs",
         "health": "/health",
     }

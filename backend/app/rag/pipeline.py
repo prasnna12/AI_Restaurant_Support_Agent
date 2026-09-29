@@ -26,7 +26,7 @@ def _get_embedding_model():
             _embedding_model = SentenceTransformer(settings.EMBEDDING_MODEL)
             logger.info(f"Loaded embedding model: {settings.EMBEDDING_MODEL}")
         except Exception as e:
-            logger.error(f"Failed to load embedding model: {e}")
+            logger.error("Failed to load embedding model (%s)", type(e).__name__)
             _embedding_model = None
     return _embedding_model
 
@@ -106,7 +106,7 @@ def build_index(db: Session) -> dict:
         return {"success": True, "indexed": len(docs), "chunks": len(all_chunks)}
 
     except Exception as e:
-        logger.error(f"Index build failed: {e}")
+        logger.error("Index build failed (%s)", type(e).__name__)
         return {"success": False, "error": str(e), "indexed": 0}
 
 
@@ -125,7 +125,7 @@ def load_index() -> bool:
             logger.info(f"RAG index loaded: {len(_rag_chunks)} chunks")
             return True
     except Exception as e:
-        logger.warning(f"Could not load RAG index: {e}")
+        logger.warning("Could not load RAG index (%s)", type(e).__name__)
     return False
 
 
@@ -165,7 +165,7 @@ def search(query: str, top_k: int = 4) -> list[dict]:
             })
         return results
     except Exception as e:
-        logger.error(f"RAG search failed: {e}")
+        logger.error("RAG search failed (%s)", type(e).__name__)
         return []
 
 

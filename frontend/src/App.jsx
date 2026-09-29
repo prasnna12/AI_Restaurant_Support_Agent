@@ -1,52 +1,559 @@
-import { useEffect, useState } from 'react'
-import axios from 'axios'
-import { Activity, ArrowUpRight, Bot, ChevronRight, CircleAlert, Clock3, LayoutDashboard, LogOut, MessageSquareText, Package, RefreshCw, Search, Send, ShieldCheck, Ticket, Utensils } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
+import {
+  ArrowUpRight, CheckCircle2, ChevronRight, CircleAlert,
+  LayoutDashboard, LogOut, MessageSquareText, Package,
+  RefreshCw, Ticket, Utensils, X,
+} from 'lucide-react'
+import {
+  agentApi, api, apiConfigured, dashboardApi, getApiErrorMessage, ticketsApi,
+} from './api.js'
 import './App.css'
 
-const api = axios.create({ baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000' })
-const formatDate = (value) => value ? new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '-'
+import Overview from './components/Overview.jsx'
+import OrdersView from './components/OrdersView.jsx'
+import TicketsView from './components/TicketsView.jsx'
+import AssistantView from './components/AssistantView.jsx'
+import OrderDetailModal from './components/OrderDetailModal.jsx'
+import TicketDetailModal from './components/TicketDetailModal.jsx'
+import TicketCreateModal from './components/TicketCreateModal.jsx'
+import ExecutionModal from './components/ExecutionModal.jsx'
+import CustomersModal from './components/CustomersModal.jsx'
 
-function App() {
-  const [token, setToken] = useState(localStorage.getItem('dineassist_token'))
+export default function App() {
+  const [token, setToken] = useState(() => localStorage.getItem('dineassist_token'))
   const [profile, setProfile] = useState(null)
-  const [email, setEmail] = useState('admin@restaurant.ai')
-  const [password, setPassword] = useState('Admin@1234')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [loginError, setLoginError] = useState('')
+  const [loginPending, setLoginPending] = useState(false)
+
+  // Navigation & View Filter States
   const [activeView, setActiveView] = useState('overview')
+  const [viewFilters, setViewFilters] = useState({})
+
+  // Workspace Data
   const [summary, setSummary] = useState(null)
   const [activity, setActivity] = useState(null)
-  const [orders, setOrders] = useState([])
-  const [tickets, setTickets] = useState([])
+  const [recentTickets, setRecentTickets] = useState([])
   const [loading, setLoading] = useState(false)
+  const [dataError, setDataError] = useState('')
+
+  // Assistant State
+  const [assistantStatus, setAssistantStatus] = useState('Ready')
   const [chatInput, setChatInput] = useState('')
-  const [chatMessages, setChatMessages] = useState([{ role: 'assistant', content: 'Hi, I\'m your DineAssist copilot. Ask me about an order, a policy, or a customer issue.' }])
+  const [chatPending, setChatPending] = useState(false)
+  const [chatMessages, setChatMessages] = useState([
+    {
+      role: 'assistant',
+      content:
+        'Welcome to DineAssist Restaurant Operations Copilot. How can I help you today with live orders, ticket triage, or store policies?',
+    },
+  ])
   const [conversationId, setConversationId] = useState(null)
 
-  const request = (config) => api({ ...config, headers: { Authorization: `Bearer ${token}` } })
-  const logout = () => { localStorage.removeItem('dineassist_token'); setToken(null); setProfile(null) }
-  const loadData = async () => {
-    setLoading(true)
-    try {
-      const [summaryResponse, activityResponse, ordersResponse, ticketsResponse] = await Promise.all([
-        request({ url: '/api/dashboard/summary' }), request({ url: '/api/dashboard/activity' }),
-        request({ url: '/api/orders?per_page=8' }), request({ url: '/api/support/tickets?per_page=8' }),
-      ])
-      setSummary(summaryResponse.data); setActivity(activityResponse.data); setOrders(ordersResponse.data.items); setTickets(ticketsResponse.data.items)
-    } catch (error) { if (error.response?.status === 401) logout() } finally { setLoading(false) }
-  }
-  useEffect(() => { if (!token) return; request({ url: '/api/auth/me' }).then(({ data }) => setProfile(data)).catch(logout); loadData() }, [token])
-  async function login(event) { event.preventDefault(); setLoginError(''); try { const { data } = await api.post('/api/auth/login', { email, password }); localStorage.setItem('dineassist_token', data.access_token); setToken(data.access_token) } catch (error) { if (!error.response) { setLoginError('The support service is unavailable. Start the backend on port 8000 and try again.') } else if (error.response.status === 401) { setLoginError('Invalid email or password. Please check your credentials and try again.') } else { setLoginError(error.response.data?.detail || 'Sign-in failed. Please try again.') } } }
-  async function sendMessage(event) {
-    event.preventDefault(); const message = chatInput.trim(); if (!message) return; setChatInput(''); setChatMessages((current) => [...current, { role: 'user', content: message }])
-    try { const { data } = await request({ method: 'POST', url: '/api/agent/chat', data: { message, conversation_id: conversationId } }); setConversationId(data.conversation_id); setChatMessages((current) => [...current, { role: 'assistant', content: data.message }]) } catch { setChatMessages((current) => [...current, { role: 'assistant', content: 'I could not reach the support service. Please try again.' }]) }
-  }
-  if (!token) return <main className="login-shell"><div className="login-art"><Utensils size={30} /><span>DineAssist</span><h1>Calm operations.<br /><em>Better service.</em></h1><p>One clear view for every order, ticket, and customer conversation.</p></div><form className="login-card" onSubmit={login}><div className="eyebrow">Operations console</div><h2>Welcome back</h2><p className="muted">Sign in to continue to your restaurant workspace.</p><label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label><label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>{loginError && <div className="error-message"><CircleAlert size={16} />{loginError}</div>}<button className="primary-button" type="submit">Sign in <ArrowUpRight size={17} /></button><small>Demo access is prefilled for local development.</small></form></main>
+  // Modals
+  const [activeOrderId, setActiveOrderId] = useState(null)
+  const [activeTicketId, setActiveTicketId] = useState(null)
+  const [activeExecutionId, setActiveExecutionId] = useState(null)
+  const [customersModalOpen, setCustomersModalOpen] = useState(false)
+  const [ticketCreateModalOpen, setTicketCreateModalOpen] = useState(false)
 
-  const metrics = [['Orders today', summary?.total_orders ?? '-', `${summary?.pending_orders ?? 0} in progress`, Package, 'orange'], ['Open tickets', summary?.open_tickets ?? '-', `${summary?.high_priority_tickets ?? 0} high priority`, Ticket, 'red'], ['Customers', summary?.total_customers ?? '-', `${summary?.total_conversations ?? 0} conversations`, Utensils, 'teal'], ['Resolved tickets', summary?.resolved_tickets ?? '-', `${summary?.escalated_tickets ?? 0} escalated`, ShieldCheck, 'green']]
-  const navItems = [['overview', LayoutDashboard, 'Overview'], ['orders', Package, 'Orders'], ['tickets', Ticket, 'Support tickets'], ['assistant', MessageSquareText, 'AI assistant']]
-  return <div className="app-shell"><aside className="sidebar"><div className="brand"><span className="brand-mark"><Utensils size={18} /></span><span>DineAssist<small>AI OPERATIONS</small></span></div><div className="sidebar-label">Workspace</div><nav>{navItems.map(([id, Icon, label]) => <button key={id} className={activeView === id ? 'nav-item active' : 'nav-item'} onClick={() => setActiveView(id)}><Icon size={18} />{label}{id === 'tickets' && summary?.open_tickets ? <b>{summary.open_tickets}</b> : null}</button>)}</nav><div className="sidebar-bottom"><div className="status-dot"><span /> Systems operational</div><button className="nav-item" onClick={logout}><LogOut size={18} />Sign out</button></div></aside><main className="main-content"><header className="topbar"><div><div className="breadcrumb">Workspace <ChevronRight size={13} /> {activeView}</div><h1>{activeView === 'overview' ? 'Good morning' : activeView === 'assistant' ? 'AI support assistant' : activeView === 'orders' ? 'Order operations' : 'Support tickets'}</h1></div><div className="top-actions"><button className="icon-button" title="Refresh data" onClick={loadData}><RefreshCw size={18} className={loading ? 'spin' : ''} /></button><div className="profile"><div className="avatar">{profile?.name?.slice(0, 1) || 'A'}</div><span>{profile?.name || 'Admin'}<small>Administrator</small></span></div></div></header>{activeView === 'assistant' ? <Assistant chatMessages={chatMessages} chatInput={chatInput} setChatInput={setChatInput} sendMessage={sendMessage} profile={profile} /> : <><section className="metrics">{metrics.map(([label, value, detail, Icon, tone]) => <div className="metric" key={label}><div className={`metric-icon ${tone}`}><Icon size={19} /></div><div><span>{label}</span><strong>{value}</strong><small>{detail}</small></div></div>)}</section>{activeView === 'overview' && <div className="dashboard-grid"><section className="panel chart-panel"><div className="panel-heading"><div><h2>Support volume</h2><p>Tickets created over the last 7 days</p></div><Activity size={19} /></div><div className="chart">{(activity?.chart_data || []).map((point) => <div className="bar-group" key={point.date}><div className="bar" style={{ height: `${Math.max(point.tickets * 22, 8)}px` }} /><small>{point.date}</small></div>)}</div></section><section className="panel activity-panel"><div className="panel-heading"><div><h2>Recent activity</h2><p>Latest support work</p></div><Clock3 size={19} /></div>{(activity?.recent_tickets || []).slice(0, 4).map((ticket) => <div className="activity-row" key={ticket.ticket_id}><span className="activity-icon"><Ticket size={15} /></span><div><strong>{ticket.title}</strong><small>{ticket.ticket_id} · {formatDate(ticket.created_at)}</small></div><span className={`tag ${ticket.priority.toLowerCase()}`}>{ticket.priority}</span></div>)}</section></div>}{activeView === 'orders' && <DataTable title="Live orders" searchPlaceholder="Search order ID or customer" rows={orders} type="orders" />}{activeView === 'tickets' && <DataTable title="Support queue" searchPlaceholder="Search tickets" rows={tickets} type="tickets" />}</>}</main></div>
+  // Notification Toast
+  const [toast, setToast] = useState(null)
+
+  const showToast = (message, type = 'success') => {
+    setToast({ message, type })
+    setTimeout(() => {
+      setToast((prev) => (prev?.message === message ? null : prev))
+    }, 4000)
+  }
+
+  const logout = () => {
+    localStorage.removeItem('dineassist_token')
+    setToken(null)
+    setProfile(null)
+    setActiveView('overview')
+  }
+
+  const loadData = useCallback(async () => {
+    if (!localStorage.getItem('dineassist_token')) return false
+    try {
+      const [summaryRes, activityRes, ticketsRes] = await Promise.all([
+        dashboardApi.getSummary(),
+        dashboardApi.getActivity(),
+        ticketsApi.list({ per_page: 5 }),
+      ])
+      setSummary(summaryRes.data)
+      setActivity(activityRes.data)
+      setRecentTickets(ticketsRes.data.items || [])
+      setDataError('')
+      return true
+    } catch (error) {
+      setDataError(getApiErrorMessage(error))
+      return false
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  const refreshData = () => {
+    setLoading(true)
+    void loadData()
+  }
+
+  const handleNavigate = (view, filters = {}) => {
+    setViewFilters(filters)
+    setActiveView(view)
+  }
+
+  const checkAssistantStatus = async () => {
+    try {
+      const { data } = await api.get('/health/ready')
+      setAssistantStatus(data.ai_provider ? `${data.ai_provider} active` : 'Active')
+    } catch {
+      setAssistantStatus('Operational')
+    }
+  }
+
+  // Check login & load initial data
+  useEffect(() => {
+    const onUnauthorized = () => logout()
+    window.addEventListener('dineassist:unauthorized', onUnauthorized)
+    return () => window.removeEventListener('dineassist:unauthorized', onUnauthorized)
+  }, [])
+
+  useEffect(() => {
+    if (!token) return undefined
+    let cancelled = false
+
+    api
+      .get('/api/auth/me')
+      .then(({ data }) => {
+        if (!cancelled) setProfile(data)
+      })
+      .catch(() => {
+        if (!cancelled) logout()
+      })
+
+    void loadData()
+    void checkAssistantStatus()
+
+    return () => {
+      cancelled = true
+    }
+  }, [token, loadData])
+
+  async function login(event) {
+    event.preventDefault()
+    setLoginError('')
+    setLoginPending(true)
+    try {
+      const { data } = await api.post('/api/auth/login', { email, password })
+      localStorage.setItem('dineassist_token', data.access_token)
+      setToken(data.access_token)
+    } catch (error) {
+      setLoginError(
+        error.response?.status === 401
+          ? 'Sign-in failed. Check your restaurant credentials and try again.'
+          : getApiErrorMessage(error)
+      )
+    } finally {
+      setLoginPending(false)
+    }
+  }
+
+  async function sendMessage(event) {
+    if (event) event.preventDefault()
+    const message = chatInput.trim()
+    if (!message || chatPending) return
+    setChatPending(true)
+    setChatMessages((current) => [...current, { role: 'user', content: message }])
+    setChatInput('')
+
+    try {
+      const { data } = await agentApi.chat({
+        message,
+        conversation_id: conversationId,
+      })
+      setConversationId(data.conversation_id)
+      setChatMessages((current) => [
+        ...current,
+        {
+          role: 'assistant',
+          content: data.message,
+          sources: data.sources || [],
+          tools: data.tool_calls || [],
+          isFallback: data.is_fallback,
+        },
+      ])
+    } catch (error) {
+      setChatMessages((current) => [
+        ...current,
+        {
+          role: 'error',
+          content: getApiErrorMessage(error),
+        },
+      ])
+      setChatInput(message)
+    } finally {
+      setChatPending(false)
+    }
+  }
+
+  const handleCreateTicket = async (formData) => {
+    try {
+      const { data } = await ticketsApi.create(formData)
+      setTicketCreateModalOpen(false)
+      showToast(`Support ticket ${data.ticket_id} created successfully!`)
+      await loadData()
+      return ''
+    } catch (err) {
+      return getApiErrorMessage(err)
+    }
+  }
+
+  if (!token) {
+    return (
+      <LoginScreen
+        email={email}
+        password={password}
+        error={loginError}
+        pending={loginPending}
+        onEmailChange={setEmail}
+        onPasswordChange={setPassword}
+        onSubmit={login}
+      />
+    )
+  }
+
+  const navItems = [
+    ['overview', LayoutDashboard, 'Overview'],
+    ['orders', Package, 'Orders'],
+    ['tickets', Ticket, 'Support tickets'],
+    ['assistant', MessageSquareText, 'AI assistant'],
+  ]
+
+  const pageTitles = {
+    overview: 'Operations Overview',
+    orders: 'Order Operations',
+    tickets: 'Support Tickets Queue',
+    assistant: 'AI Support Assistant',
+  }
+
+  return (
+    <div className="app-shell">
+      {/* ─── SIDEBAR NAVIGATION ─────────────────────────────────────── */}
+      <aside className="sidebar">
+        <a
+          className="brand"
+          href="#overview"
+          onClick={(e) => {
+            e.preventDefault()
+            handleNavigate('overview')
+          }}
+          aria-label="DineAssist overview"
+        >
+          <span className="brand-mark">
+            <Utensils size={18} />
+          </span>
+          <span>
+            DineAssist<small>RESTAURANT OPERATIONS</small>
+          </span>
+        </a>
+
+        <div className="sidebar-label">Operations Console</div>
+        <nav aria-label="Workspace navigation">
+          {navItems.map(([id, Icon, label]) => (
+            <button
+              key={id}
+              className={`nav-item${activeView === id ? ' active' : ''}`}
+              onClick={() => handleNavigate(id)}
+              aria-current={activeView === id ? 'page' : undefined}
+            >
+              <Icon size={18} />
+              <span>{label}</span>
+              {id === 'tickets' && summary?.open_tickets > 0 && (
+                <b className="nav-badge">{summary.open_tickets}</b>
+              )}
+              {id === 'orders' && summary?.pending_orders > 0 && (
+                <span className="nav-sub-badge">{summary.pending_orders}</span>
+              )}
+            </button>
+          ))}
+        </nav>
+
+        <div className="sidebar-bottom">
+          <div className="service-status">
+            <span className="status-light" />
+            <span>
+              <strong>AI Copilot</strong>
+              <small>{assistantStatus}</small>
+            </span>
+          </div>
+          <button className="nav-item sign-out" onClick={logout}>
+            <LogOut size={18} />
+            <span>Sign out</span>
+          </button>
+        </div>
+      </aside>
+
+      {/* ─── MAIN CONTENT ───────────────────────────────────────────── */}
+      <main className="main-content">
+        <header className="topbar">
+          <div>
+            <div className="breadcrumb">
+              <span>Workspace</span>
+              <ChevronRight size={13} />
+              <span>{pageTitles[activeView]}</span>
+            </div>
+            <h1>{pageTitles[activeView]}</h1>
+          </div>
+          <div className="top-actions">
+            <button
+              className="icon-button"
+              title="Refresh workspace records"
+              aria-label="Refresh workspace records"
+              onClick={refreshData}
+              disabled={loading}
+            >
+              <RefreshCw size={17} className={loading ? 'spin' : ''} />
+            </button>
+            <div className="profile">
+              <div className="avatar">{profile?.name?.slice(0, 1) || 'A'}</div>
+              <span>
+                {profile?.name || 'Administrator'}
+                <small>{profile?.role || 'Operations Lead'}</small>
+              </span>
+            </div>
+          </div>
+        </header>
+
+        {!apiConfigured && (
+          <div className="notice warning">
+            <CircleAlert size={17} />
+            <span>
+              Backend URL is not configured. Set <code>VITE_API_BASE_URL</code> when building.
+            </span>
+          </div>
+        )}
+
+        {dataError && (
+          <div className="notice error-notice" role="alert">
+            <CircleAlert size={17} />
+            <span>{dataError}</span>
+            <button className="text-button" onClick={refreshData}>
+              Try again
+            </button>
+          </div>
+        )}
+
+        {/* ─── ACTIVE VIEW RENDER ────────────────────────────────────── */}
+        {activeView === 'overview' && (
+          <Overview
+            summary={summary}
+            activity={activity}
+            tickets={recentTickets}
+            onNavigate={handleNavigate}
+            onOpenOrder={(orderId) => setActiveOrderId(orderId)}
+            onOpenTicket={(ticketId) => setActiveTicketId(ticketId)}
+            onOpenExecution={(execId) => setActiveExecutionId(execId)}
+            onOpenCustomers={() => setCustomersModalOpen(true)}
+            onOpenCreateTicket={() => setTicketCreateModalOpen(true)}
+            onRefresh={refreshData}
+            loading={loading}
+          />
+        )}
+
+        {activeView === 'orders' && (
+          <OrdersView
+            initialStatus={viewFilters.status || 'All statuses'}
+            initialSearch={viewFilters.search || ''}
+            onViewOrder={(orderId) => setActiveOrderId(orderId)}
+          />
+        )}
+
+        {activeView === 'tickets' && (
+          <TicketsView
+            initialStatus={viewFilters.status || 'All statuses'}
+            initialPriority={viewFilters.priority || 'All priorities'}
+            initialCategory={viewFilters.category || 'All categories'}
+            initialSearch={viewFilters.search || ''}
+            onViewTicket={(ticketId) => setActiveTicketId(ticketId)}
+            onCreateTicket={() => setTicketCreateModalOpen(true)}
+          />
+        )}
+
+        {activeView === 'assistant' && (
+          <AssistantView
+            messages={chatMessages}
+            input={chatInput}
+            pending={chatPending}
+            status={assistantStatus}
+            profile={profile}
+            onInput={setChatInput}
+            onSubmit={sendMessage}
+          />
+        )}
+      </main>
+
+      {/* ─── POPUP MODALS ────────────────────────────────────────────── */}
+      {activeOrderId && (
+        <OrderDetailModal
+          orderId={activeOrderId}
+          onClose={() => setActiveOrderId(null)}
+          onStatusUpdated={() => {
+            void loadData()
+          }}
+        />
+      )}
+
+      {activeTicketId && (
+        <TicketDetailModal
+          ticketId={activeTicketId}
+          onClose={() => setActiveTicketId(null)}
+          onStatusUpdated={() => {
+            void loadData()
+          }}
+          onOpenOrder={(orderRef) => {
+            setActiveTicketId(null)
+            setActiveOrderId(orderRef)
+          }}
+        />
+      )}
+
+      {activeExecutionId && (
+        <ExecutionModal
+          executionId={activeExecutionId}
+          onClose={() => setActiveExecutionId(null)}
+          onOpenTicket={(ticketId) => {
+            setActiveExecutionId(null)
+            setActiveTicketId(ticketId)
+          }}
+          onOpenOrder={(orderRef) => {
+            setActiveExecutionId(null)
+            setActiveOrderId(orderRef)
+          }}
+        />
+      )}
+
+      {customersModalOpen && (
+        <CustomersModal
+          totalCustomers={summary?.total_customers}
+          totalConversations={summary?.total_conversations}
+          onClose={() => setCustomersModalOpen(false)}
+          onSelectConversation={(sessionId) => {
+            setCustomersModalOpen(false)
+            setConversationId(sessionId)
+            handleNavigate('assistant')
+          }}
+        />
+      )}
+
+      {ticketCreateModalOpen && (
+        <TicketCreateModal
+          onClose={() => setTicketCreateModalOpen(false)}
+          onSubmit={handleCreateTicket}
+        />
+      )}
+
+      {/* ─── TOAST FEEDBACK ──────────────────────────────────────────── */}
+      {toast && (
+        <div
+          className={`toast ${toast.type === 'error' ? 'error-toast' : ''}`}
+          role={toast.type === 'error' ? 'alert' : 'status'}
+        >
+          {toast.type === 'error' ? <CircleAlert size={17} /> : <CheckCircle2 size={17} />}
+          <span>{toast.message}</span>
+          <button onClick={() => setToast(null)} aria-label="Dismiss notification">
+            <X size={15} />
+          </button>
+        </div>
+      )}
+    </div>
+  )
 }
 
-function Assistant({ chatMessages, chatInput, setChatInput, sendMessage, profile }) { return <section className="assistant-page"><div className="section-heading"><div><div className="eyebrow">Live support</div><h2>Ask the operations copilot</h2></div><div className="online"><span /> Mock AI connected</div></div><div className="chat-window">{chatMessages.map((message, index) => <div className={`chat-message ${message.role}`} key={`${message.role}-${index}`}><div className="chat-icon">{message.role === 'assistant' ? <Bot size={16} /> : <div className="avatar mini">{profile?.name?.slice(0, 1) || 'A'}</div>}</div><div><small>{message.role === 'assistant' ? 'DineAssist AI' : 'You'}</small><p>{message.content}</p></div></div>)}<form className="chat-form" onSubmit={sendMessage}><input value={chatInput} onChange={(event) => setChatInput(event.target.value)} placeholder="Ask about an order, ticket, or policy..." /><button className="send-button" aria-label="Send message"><Send size={17} /></button></form></div></section> }
-function DataTable({ title, searchPlaceholder, rows, type }) { const [search, setSearch] = useState(''); const filtered = rows.filter((row) => JSON.stringify(row).toLowerCase().includes(search.toLowerCase())); return <section className="panel table-panel"><div className="panel-heading"><div><h2>{title}</h2><p>{rows.length} records available</p></div><div className="search-field"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={searchPlaceholder} /></div></div><div className="table-wrap"><table><thead><tr>{type === 'orders' ? <><th>Order</th><th>Customer</th><th>Status</th><th>Total</th><th>Created</th></> : <><th>Ticket</th><th>Category</th><th>Priority</th><th>Status</th><th>Created</th></>}</tr></thead><tbody>{filtered.map((row) => type === 'orders' ? <tr key={row.order_id}><td><strong>{row.order_id}</strong></td><td>{row.customer_name}</td><td><span className="status-pill"><span />{row.status.replace('_', ' ')}</span></td><td>${row.grand_total.toFixed(2)}</td><td>{formatDate(row.created_at)}</td></tr> : <tr key={row.ticket_id}><td><strong>{row.ticket_id}</strong><small className="cell-subtitle">{row.title}</small></td><td>{row.category}</td><td><span className={`tag ${row.priority.toLowerCase()}`}>{row.priority}</span></td><td>{row.status}</td><td>{formatDate(row.created_at)}</td></tr>)}</tbody></table>{filtered.length === 0 && <div className="empty-state">No matching records found.</div>}</div></section> }
-export default App
+function LoginScreen({
+  email,
+  password,
+  error,
+  pending,
+  onEmailChange,
+  onPasswordChange,
+  onSubmit,
+}) {
+  return (
+    <main className="login-shell">
+      <section className="login-art" aria-label="DineAssist restaurant operations">
+        <div className="login-brand">
+          <span className="brand-mark">
+            <Utensils size={18} />
+          </span>
+          DineAssist
+        </div>
+        <div className="login-copy">
+          <div className="eyebrow">Restaurant Operations Console</div>
+          <h1>
+            Every service detail,
+            <br />
+            <em>in good hands.</em>
+          </h1>
+          <p>
+            Real-time orders, automated complaint triage, and AI customer care in one synchronized workspace.
+          </p>
+        </div>
+        <div className="login-foot">
+          <span className="status-light" /> Production Operations Workspace
+        </div>
+      </section>
+
+      <form className="login-card" onSubmit={onSubmit}>
+        <div className="eyebrow">Secure Sign In</div>
+        <h2>Welcome Back</h2>
+        <p className="muted">Sign in with your restaurant operations account.</p>
+
+        <label htmlFor="login-email">Email Address</label>
+        <input
+          id="login-email"
+          type="email"
+          autoComplete="username"
+          value={email}
+          onChange={(e) => onEmailChange(e.target.value)}
+          placeholder="admin@restaurant.ai"
+          required
+        />
+
+        <label htmlFor="login-password">Password</label>
+        <input
+          id="login-password"
+          type="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={(e) => onPasswordChange(e.target.value)}
+          placeholder="••••••••••••"
+          minLength={6}
+          maxLength={128}
+          required
+        />
+
+        {error && (
+          <div className="error-message" role="alert">
+            <CircleAlert size={16} />
+            {error}
+          </div>
+        )}
+
+        <button className="primary-button" type="submit" disabled={pending}>
+          {pending ? 'Signing in…' : 'Sign in to Console'}
+          {!pending && <ArrowUpRight size={17} />}
+        </button>
+
+        {!apiConfigured && (
+          <div className="config-hint">
+            This static build has no backend URL configured. Set <code>VITE_API_BASE_URL</code> and rebuild.
+          </div>
+        )}
+      </form>
+    </main>
+  )
+}

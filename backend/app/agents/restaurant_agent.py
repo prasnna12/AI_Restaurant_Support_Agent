@@ -100,7 +100,7 @@ def _get_llm_response(messages: list[dict], system: str) -> tuple[str, bool]:
             return resp.text, False
 
     except Exception as e:
-        logger.error(f"LLM call failed: {type(e).__name__}: {e}")
+        logger.error("LLM call failed (%s)", type(e).__name__)
         return None, True  # Fall back to deterministic
 
     return None, True

@@ -204,6 +204,15 @@ class TestComplaintWorkflow:
         assert "classify_complaint" in step_names
         assert "create_ticket" in step_names
 
+    def test_complaint_text_is_not_written_to_logs(self, caplog):
+        marker = "PRIVATE-CUSTOMER-COMPLAINT-MARKER"
+        with caplog.at_level("INFO"):
+            resp = client.post("/api/automation/complaints", headers=self.headers, json={
+                "complaint_text": f"I need help with this issue: {marker}",
+            })
+        assert resp.status_code == 200
+        assert marker not in caplog.text
+
 
 # ─── Dashboard Tests ──────────────────────────────────────────────────────────
 class TestDashboard:

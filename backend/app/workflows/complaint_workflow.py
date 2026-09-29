@@ -128,7 +128,7 @@ def run_complaint_workflow(
             "detail": detail,
             "timestamp": utcnow().isoformat(),
         })
-        logger.info(f"[{execution_id}] Step '{step}': {status} — {detail}")
+        logger.info("[%s] Workflow step %s: %s", execution_id, step, status)
 
     # Step 1: Receive complaint
     add_step("receive_complaint", "success", f"Complaint received ({len(complaint_text)} chars)")
@@ -191,16 +191,12 @@ def run_complaint_workflow(
     # Step 6: Notification log (local — no external sends)
     notification_logged = False
     try:
-        notification_msg = (
-            f"[NOTIFICATION LOG]\n"
-            f"Execution: {execution_id}\n"
-            f"Category: {classification['category']} | Priority: {classification['priority']}\n"
-            f"Ticket: {ticket_id or 'Not created'}\n"
-            f"Order: {order_reference or 'N/A'}\n"
-            f"Complaint: {complaint_text[:100]}...\n"
-            f"Timestamp: {utcnow().isoformat()}"
+        logger.info(
+            "[%s] Local notification event recorded (category=%s, priority=%s)",
+            execution_id,
+            classification["category"],
+            classification["priority"],
         )
-        logger.info(notification_msg)
         notification_logged = True
         add_step("notification_log", "success", f"Notification logged locally for ticket {ticket_id}")
     except Exception as e:
@@ -236,7 +232,7 @@ def run_complaint_workflow(
         db.add(exec_record)
         db.commit()
     except Exception as e:
-        logger.error(f"Failed to persist execution record: {e}")
+        logger.error("Failed to persist execution record (%s)", type(e).__name__)
 
     message = (
         f"Your complaint has been classified as a **{classification['category']}** issue with **{classification['priority']}** priority. "

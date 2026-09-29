@@ -8,7 +8,7 @@ Start the backend first from the repository root:
 
 ```powershell
 Push-Location backend
-uvicorn app.main:app --host 127.0.0.1 --port 8000
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001
 Pop-Location
 ```
 
@@ -16,21 +16,15 @@ In a second terminal, start the frontend:
 
 ```powershell
 Push-Location frontend
-npm install
+npm ci
+Copy-Item .env.example .env.local
 npm run dev
 Pop-Location
 ```
 
-Open http://localhost:5173. The frontend sends API requests to `http://localhost:8000` by default. Set `VITE_API_URL` when the backend runs elsewhere.
+Open the local URL printed by Vite. The frontend sends API requests to `http://127.0.0.1:8001` by default. Set `VITE_API_BASE_URL` in `.env.local` when the backend runs elsewhere.
 
-## Demo login
-
-The backend seeds this administrator on first startup when the default local `.env` settings are used:
-
-- Email: `admin@restaurant.ai`
-- Password: `Admin@1234`
-
-Change these values in `backend/.env` for any shared or non-demo environment. Never commit real credentials or API keys.
+Configure unique administrator credentials in `backend/.env` from `backend/.env.example`. Do not commit real credentials or API keys.
 
 ## Checks
 

@@ -1,4 +1,4 @@
-﻿"""Dashboard summary and activity endpoints."""
+"""Dashboard summary and activity endpoints."""
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Query
@@ -67,11 +67,11 @@ def get_activity(db: Session = Depends(get_db), _: AdminUser = Depends(get_curre
             for t in recent_tickets
         ],
         "recent_executions": [
-            {"execution_id": e.execution_id[:8], "category": e.category, "priority": e.priority, "status": e.status, "created_at": e.created_at.isoformat()}
+            {"execution_id": e.execution_id, "short_id": e.execution_id[:8], "category": e.category, "priority": e.priority, "status": e.status, "created_at": e.created_at.isoformat()}
             for e in recent_execs
         ],
         "recent_conversations": [
-            {"session_id": c.session_id[:8], "title": c.title[:40], "updated_at": c.updated_at.isoformat()}
+            {"session_id": c.session_id, "short_id": c.session_id[:8], "title": c.title[:40], "updated_at": c.updated_at.isoformat()}
             for c in recent_convs
         ],
         "chart_data": chart_data,

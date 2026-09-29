@@ -1,13 +1,24 @@
-﻿"""Order endpoints."""
+"""Order endpoints."""
 import math
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_admin
 from app.db.database import get_db
-from app.models.models import AdminUser, Customer
-from app.repositories.order_repo import get_order_by_order_id, get_orders_paginated
-from app.schemas.schemas import OrderDetailOut, OrderListItem, OrderStatusOut, PaginatedOrders
+from app.models.models import AdminUser
+from app.repositories.order_repo import (
+    get_order_by_order_id,
+    get_orders_paginated,
+    update_order_status,
+)
+from app.schemas.schemas import (
+    OrderDetailOut,
+    OrderItemOut,
+    OrderListItem,
+    OrderStatusOut,
+    OrderStatusUpdate,
+    PaginatedOrders,
+)
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 
@@ -17,30 +28,50 @@ def list_orders(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     status: str | None = Query(None),
+    search: str | None = Query(None),
     db: Session = Depends(get_db),
     _: AdminUser = Depends(get_current_admin),
 ):
-    items, total = get_orders_paginated(db, page, per_page, status)
+    items, total = get_orders_paginated(db, page, per_page, status, search)
     result = []
     for o in items:
-        result.append(OrderListItem(
-            order_id=o.order_id,
-            customer_name=o.customer.name if o.customer else "Unknown",
-            status=o.status,
-            grand_total=o.grand_total,
-            item_count=len(o.items),
-            created_at=o.created_at,
-        ))
-    return PaginatedOrders(items=result, total=total, page=page, per_page=per_page, pages=math.ceil(total / per_page))
+        result.append(
+            OrderListItem(
+                order_id=o.order_id,
+                customer_name=o.customer.name if o.customer else "Unknown",
+                status=o.status,
+                grand_total=o.grand_total,
+                item_count=len(o.items),
+                created_at=o.created_at,
+            )
+        )
+    return PaginatedOrders(
+        items=result,
+        total=total,
+        page=page,
+        per_page=per_page,
+        pages=math.ceil(total / per_page) if total else 1,
+    )
 
 
 @router.get("/{order_id}", response_model=OrderDetailOut)
-def get_order(order_id: str, db: Session = Depends(get_db), _: AdminUser = Depends(get_current_admin)):
+def get_order(
+    order_id: str,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_admin),
+):
     order = get_order_by_order_id(db, order_id.upper())
     if not order:
         raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
-    from app.schemas.schemas import OrderItemOut
-    items = [OrderItemOut(name=i.name, quantity=i.quantity, unit_price=i.unit_price, total_price=i.total_price) for i in order.items]
+    items = [
+        OrderItemOut(
+            name=i.name,
+            quantity=i.quantity,
+            unit_price=i.unit_price,
+            total_price=i.total_price,
+        )
+        for i in order.items
+    ]
     return OrderDetailOut(
         order_id=order.order_id,
         status=order.status,
@@ -56,8 +87,51 @@ def get_order(order_id: str, db: Session = Depends(get_db), _: AdminUser = Depen
 
 
 @router.get("/{order_id}/status", response_model=OrderStatusOut)
-def get_order_status_endpoint(order_id: str, db: Session = Depends(get_db), _: AdminUser = Depends(get_current_admin)):
+def get_order_status_endpoint(
+    order_id: str,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_admin),
+):
     order = get_order_by_order_id(db, order_id.upper())
     if not order:
         raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
-    return OrderStatusOut(order_id=order.order_id, status=order.status, updated_at=order.updated_at, found=True)
+    return OrderStatusOut(
+        order_id=order.order_id,
+        status=order.status,
+        updated_at=order.updated_at,
+        found=True,
+    )
+
+
+@router.put("/{order_id}/status", response_model=OrderDetailOut)
+def update_order_status_endpoint(
+    order_id: str,
+    payload: OrderStatusUpdate,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_admin),
+):
+    order = get_order_by_order_id(db, order_id.upper())
+    if not order:
+        raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
+    updated = update_order_status(db, order, payload.status)
+    items = [
+        OrderItemOut(
+            name=i.name,
+            quantity=i.quantity,
+            unit_price=i.unit_price,
+            total_price=i.total_price,
+        )
+        for i in updated.items
+    ]
+    return OrderDetailOut(
+        order_id=updated.order_id,
+        status=updated.status,
+        customer_name=updated.customer.name if updated.customer else "Unknown",
+        items=items,
+        subtotal=updated.subtotal,
+        tax=updated.tax,
+        grand_total=updated.grand_total,
+        notes=updated.notes or "",
+        created_at=updated.created_at,
+        updated_at=updated.updated_at,
+    )

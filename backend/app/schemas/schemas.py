@@ -1,4 +1,4 @@
-﻿"""Pydantic schemas for request/response validation."""
+"""Pydantic schemas for request/response validation."""
 from datetime import datetime
 from typing import Any, Optional
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -43,6 +43,10 @@ class OrderStatusOut(BaseModel):
     status: str
     updated_at: datetime
     found: bool = True
+
+
+class OrderStatusUpdate(BaseModel):
+    status: str = Field(..., pattern="^(pending|confirmed|preparing|out_for_delivery|delivered|cancelled|failed)$")
 
 
 class OrderDetailOut(BaseModel):
